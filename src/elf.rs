@@ -170,11 +170,8 @@ fn parse_sections(
     file.read_exact(&mut buf)?;
 
     for chunk in buf.chunks(elf64_section_size) {
-        println!("chunk: {:?}", chunk);
         sections.push(parse_section(chunk));
     }
-
-    println!("sections: {:#?}", sections);
 
     // read section names
     if let Some(name_section) = sections.get(section_names) {
@@ -242,7 +239,6 @@ pub fn parse_elf_info(file: &mut File) -> LazyResult<Elf64> {
         header_count as usize, header_size as usize)?;
 
     file.seek(SeekFrom::Start(section_table))?;
-    println!("section names: {}", section_names);
     let sections = parse_sections(file,
         section_count as usize, section_size as usize, section_names as usize)?;
 

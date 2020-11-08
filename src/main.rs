@@ -105,6 +105,7 @@ impl Debugger {
             breakpoint.disable()?;
             ptrace::setregs(pid, regs)?;
         }
+
         Ok(())
     }
 
@@ -167,9 +168,6 @@ impl Debugger {
 }
 
 fn main() -> LazyResult<()> {
-    let mut file = std::fs::File::open("/bin/ls")?;
-    let info = parse_elf_info(&mut file)?;
-    println!("elf info: {:#x?}", info);
     match unsafe { fork()? } {
         ForkResult::Parent { child } => {
             let mut debugger = Debugger::init_with(child)?;
