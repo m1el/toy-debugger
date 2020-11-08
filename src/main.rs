@@ -3,7 +3,7 @@ use std::io::{Seek, SeekFrom};
 use std::fs::File;
 use std::collections::BTreeMap;
 use libc::user_regs_struct;
-use nix::unistd::{execvp, fork, ForkResult, Pid};
+use nix::unistd::{execv, fork, ForkResult, Pid};
 use nix::sys::wait::{waitpid, WaitStatus};
 use nix::sys::ptrace;
 
@@ -21,16 +21,33 @@ use errors::LazyResult;
 use memory_maps::{MemoryMap};
 use syscalls::SYSCALL_NAMES_X86_64;
 
-fn child_fn() -> LazyResult<()> {
-    let program = "ls\0";
-    // path: &str, argv: &[&str]
-    // make this accept program and argv
-    unsafe {
-        let progname_ptr = CStr::from_ptr(program.as_ptr() as *const i8);
-        ptrace::traceme()?;
-        execvp(progname_ptr, &[progname_ptr])?;
+/// Request system to trace our process and exec the target program with arguments
+fn spawn_traceable_child(prog: &str, argv: &[&str]) -> LazyResult<()> {
+    // This string will hold all of the necessary zero-terminated values
+    // starting from program name, and followed by arguments.
+    let mut arena = String::new();
+    arena.push_str(prog);
+    arena.push('\0');
+    for arg in argv {
+        arena.push_str(arg);
+        arena.push('\0');
     }
-    // here we need to start the debuggee
+
+    let program_ptr = arena.as_ptr();
+    unsafe {
+        let program_cstr = CStr::from_ptr(program_ptr as *const i8);
+        let mut argv_ptr = Vec::new();
+        // Keep track of current position in arena
+        let mut pos = prog.len() + 1;
+        for arg in argv {
+            let cstr = CStr::from_ptr(program_ptr.offset(pos as isize) as *const i8);
+            argv_ptr.push(cstr);
+            pos += arg.len() + 1;
+        }
+        ptrace::traceme()?;
+        execv(program_cstr, &argv_ptr)?;
+    }
+
     Ok(())
 }
 
@@ -51,7 +68,8 @@ impl Debugger {
     fn init_with(child: Pid) -> LazyResult<Self> {
         let _ = waitpid(child, None)?;
 
-        let maps = MemoryMap::from_pid(child)?;
+        let maps = MemoryMap::from_pid(child)
+            .map_err(|_| "could not read memory map!")?;
         let mem_path = format!("/proc/{}/mem", child);
         let mem = File::open(mem_path)?;
         let auxv = read_auxv(child)?;
@@ -162,7 +180,7 @@ impl Debugger {
                 }
             }
         }
-        // here we need to start the debugger
+
         Ok(())
     }
 }
@@ -170,11 +188,13 @@ impl Debugger {
 fn main() -> LazyResult<()> {
     match unsafe { fork()? } {
         ForkResult::Parent { child } => {
+            // The parent will be the debugger and should know its child pid
             let mut debugger = Debugger::init_with(child)?;
             debugger.run_loop(true)?;
         }
         ForkResult::Child => {
-            child_fn()?;
+            // The child will be the debuggee and spawn target program
+            spawn_traceable_child("/bin/ls", &["/bin/ls"])?;
         }
     }
     Ok(())
