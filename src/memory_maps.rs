@@ -131,36 +131,50 @@ impl std::str::FromStr for MemoryRegion {
     }
 }
 
-pub fn read_memory_maps(pid: Pid) -> LazyResult<Vec<MemoryRegion>> {
-    let path = format!("/proc/{}/maps", pid);
-    let content = std::fs::read_to_string(path)?;
-
-    let mut result = Vec::new();
-    for line in content.lines() {
-        result.push(line.parse()?);
-    }
-    Ok(result)
+pub struct MemoryMap {
+    regions: Vec<MemoryRegion>,
 }
 
-// We want to translate a known memory address in the module
-// to an address in process's virtual memory
-pub fn translate_address(
-    maps: &[MemoryRegion], module: &str, address: usize
-) -> Option<usize>
-{
-    for region in maps {
-        // skip memory regions which don't correspond to needle module
-        if region.filename.as_ref().map_or(true, |x| x != module) {
-            continue;
-        }
-        let AddressRange { start, end } = region.address_range;
-        let size = end - start;
-        let offset = region.offset;
-        if address > offset && address - offset < size {
-            return Some(start + (address - offset))
-        }
-    }
-    // We have failed to find a region, return None
-    None
-}
+impl MemoryMap {
+    pub fn from_pid(pid: Pid) -> LazyResult<Self> {
+        let path = format!("/proc/{}/maps", pid);
+        let content = std::fs::read_to_string(path)?;
 
+        let mut regions = Vec::new();
+        for line in content.lines() {
+            regions.push(line.parse()?);
+        }
+
+        Ok(Self { regions })
+    }
+
+    pub fn find_module(&self, address: usize) -> Option<&str> {
+        self.regions.iter()
+            .find(|region| {
+                let AddressRange { start, end } = region.address_range;
+                start <= address && end > address
+            })
+            .and_then(|region| region.filename.as_ref().map(|s| s.as_str()))
+    }
+
+    // We want to translate a known memory address in the module
+    // to an address in process's virtual memory
+    pub fn translate_address(&self, module: &str, address: usize)
+        -> Option<usize>
+    {
+        for region in &self.regions {
+            // skip memory regions which don't correspond to needle module
+            if region.filename.as_ref().map_or(true, |x| x != module) {
+                continue;
+            }
+            let AddressRange { start, end } = region.address_range;
+            let size = end - start;
+            let offset = region.offset;
+            if address > offset && address - offset < size {
+                return Some(start + (address - offset))
+            }
+        }
+        // We have failed to find a region, return None
+        None
+    }
+}

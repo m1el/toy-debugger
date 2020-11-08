@@ -29,11 +29,15 @@ impl Breakpoint {
         memory[0] = INT3;
         let word = usize::from_ne_bytes(memory);
         unsafe {
+            // Bug: ptrace::write asks for a pointer, but it uses it as a word!
             ptrace::write(self.pid, address, word as *mut std::ffi::c_void)?;
         }
         self.enabled = true;
         Ok(())
     }
+
+    //pub fn step_over(current_rip: usize) -> LazyResult<()> {
+    //}
 
     pub fn disable(&mut self) -> LazyResult<()> {
         if !self.enabled {
@@ -41,7 +45,6 @@ impl Breakpoint {
         }
         let address = self.address as *mut std::ffi::c_void;
         let mut memory = ptrace::read(self.pid, address)?.to_ne_bytes();
-        println!("disabling bp, original={}", self.original_byte);
         memory[0] = self.original_byte;
         let word = usize::from_ne_bytes(memory);
         unsafe {
