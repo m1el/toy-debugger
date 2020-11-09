@@ -3,6 +3,7 @@ use nix::sys::ptrace;
 use crate::errors::LazyResult;
 
 pub struct Breakpoint {
+    pub name: String,
     pid: Pid,
     pub address: usize,
     enabled: bool,
@@ -11,8 +12,9 @@ pub struct Breakpoint {
 
 const INT3: u8 = 0xcc;
 impl Breakpoint {
-    pub fn new(pid: Pid, address: usize) -> Self {
+    pub fn new(name: String, pid: Pid, address: usize) -> Self {
         Self {
+            name,
             pid, address,
             enabled: false,
             original_byte: 0,

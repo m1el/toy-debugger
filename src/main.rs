@@ -101,7 +101,7 @@ impl Debugger {
                 let addr = interp + export.vaddr;
                 println!("dl_debug_state breakpoint {:x?} {:x}", export.vaddr, addr);
                 //println!("maps: {:x?}", &maps);
-                let mut breakpoint = Breakpoint::new(child, addr);
+                let mut breakpoint = Breakpoint::new("dl_debug".into(), child, addr);
                 breakpoint.enable()?;
                 breakpoints.insert((child, addr), breakpoint);
             }
@@ -110,7 +110,7 @@ impl Debugger {
 
         println!("elfs loaded: {:?}", elfs.keys().collect::<Vec<&String>>());
 
-        let mut breakpoint = Breakpoint::new(child, entry_point);
+        let mut breakpoint = Breakpoint::new("_start".into(), child, entry_point);
         breakpoint.enable()?;
         println!("successfully enabled a breakpoint at entry point.");
 
@@ -136,17 +136,56 @@ impl Debugger {
         })
     }
 
+    fn update_memory_map(&mut self) -> LazyResult<()> {
+        self.maps = MemoryMap::from_pid(self.current_child)
+            .map_err(|_| "could not read memory map!")?;
+        Ok(())
+    }
+
+    fn load_elf(&mut self, path: &str) -> LazyResult<bool> {
+        use std::collections::btree_map::Entry;
+        match self.elfs.entry(path.into()) {
+            Entry::Vacant(entry) => {
+                let mut file = File::open(path)?;
+                entry.insert(parse_elf_info(&mut file)?);
+                Ok(true)
+            },
+            _ => Ok(false)
+        }
+    }
+
+    fn handle_startup(&mut self) -> LazyResult<()> {
+        self.update_memory_map()?;
+        let modules = self.maps.list_modules();
+        for module in modules {
+            let filename = &module.filename;
+            match self.load_elf(filename) {
+                Ok(loaded) => if loaded {
+                    println!("loaded {}", filename);
+                }
+                Err(err) => {
+                    println!("failed to load module {} {:?}",
+                             filename, err);
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn handle_breakpoint(&mut self, mut regs: user_regs_struct, pid: Pid)
         -> LazyResult<()>
     {
         let prev_addr = regs.rip.wrapping_sub(1);
         // Test if we just executed a breakpoint
         if let Some(breakpoint) = self.breakpoints.get_mut(&(pid, prev_addr as usize)) {
-            println!("hit breakpoint at {:x}", prev_addr);
+            println!("hit breakpoint '{}' at {:x}", breakpoint.name, prev_addr);
             regs.rip = prev_addr;
             breakpoint.disable()?;
             ptrace::setregs(pid, regs)?;
             self.pending_breakpoint_addr = Some(prev_addr as usize);
+            if breakpoint.address == self.entry_point {
+                self.handle_startup()?;
+            }
         }
 
         Ok(())

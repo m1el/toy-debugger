@@ -1,12 +1,6 @@
 use nix::unistd::{Pid};
 use crate::errors::LazyResult;
 
-#[derive(Debug)]
-struct AddressRange {
-    start: usize,
-    end: usize,
-}
-
 struct MemoryPermissions(u8);
 impl MemoryPermissions {
     fn new(read: bool, write: bool, execute: bool, private: bool) -> Self {
@@ -68,6 +62,12 @@ impl std::str::FromStr for Device {
         let low = u8::from_str_radix(&s[3..], 16)?;
         Ok(Device(high, low))
     }
+}
+
+#[derive(Debug)]
+pub struct AddressRange {
+    start: usize,
+    end: usize,
 }
 
 #[derive(Debug)]
@@ -136,6 +136,12 @@ pub struct MemoryMap {
     regions: Vec<MemoryRegion>,
 }
 
+#[derive(Debug)]
+pub struct LoadedModule {
+    pub base_addr: usize,
+    pub filename: String,
+}
+
 impl MemoryMap {
     pub fn from_pid(pid: Pid) -> LazyResult<Self> {
         let path = format!("/proc/{}/maps", pid);
@@ -177,5 +183,24 @@ impl MemoryMap {
         }
         // We have failed to find a region, return None
         None
+    }
+
+    pub fn list_modules(&self) -> Vec<LoadedModule> {
+        let mut modules = Vec::new();
+        for region in &self.regions {
+            let filename = if let Some(name) = &region.filename {
+                name
+            } else {
+                continue;
+            };
+
+            // skip non-file and non-start sections
+            if region.inode == 0 || region.offset != 0 { continue; }
+            modules.push(LoadedModule {
+                base_addr: region.address_range.start,
+                filename: filename.clone(),
+            })
+        }
+        modules
     }
 }
