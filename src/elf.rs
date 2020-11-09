@@ -58,6 +58,7 @@ pub struct Elf64 {
     headers: Vec<Elf64ProgramHeader>,
     sections: Vec<Elf64Section>,
     flags: u32,
+    exports: Vec<ExportSymbol>,
     /*
 unsigned char e_ident[16]; /* ELF identification */
 Elf64_Half e_type; /* Object file type */
@@ -76,6 +77,24 @@ Elf64_Half e_shstrndx; /* Section name string table index */
 */
 }
 
+#[derive(Debug)]
+pub struct ExportLocation {
+    pub vaddr: usize,
+    pub faddr: usize,
+    pub size: usize,
+}
+
+impl Elf64 {
+    pub fn lookup_export(&self, symbol: &str) -> Option<ExportLocation> {
+        let export = self.exports.iter().find(|e| e.name == symbol)?;
+        Some(ExportLocation {
+            vaddr: export.value as usize,
+            faddr: export.value as usize,
+            size: export.size as usize,
+        })
+    }
+}
+
 const CLASS_32BIT: u8 = 1;
 const CLASS_64BIT: u8 = 2;
 const ENDIANNESS_LITTLE: u8 = 1;
@@ -92,7 +111,7 @@ pub fn parse_program_headers(file: &mut File, count: usize, size: usize)
     if size != elf64_header_size { Err("invalid program headers size, expect 0x38")? }
     let mut buf = vec![0_u8; count * size];
     file.read_exact(&mut buf)?;
-    for chunk in buf.chunks(elf64_header_size) {
+    for chunk in buf.chunks_exact(elf64_header_size) {
         let htype = u32::from_le_bytes(chunk[0..4].try_into().unwrap());
         let flags = u32::from_le_bytes(chunk[4..8].try_into().unwrap());
         let offset = u64::from_le_bytes(chunk[8..16].try_into().unwrap());
@@ -169,7 +188,7 @@ fn parse_sections(
     let mut buf = vec![0_u8; count * size];
     file.read_exact(&mut buf)?;
 
-    for chunk in buf.chunks(elf64_section_size) {
+    for chunk in buf.chunks_exact(elf64_section_size) {
         sections.push(parse_section(chunk));
     }
 
@@ -192,6 +211,82 @@ fn parse_sections(
     Ok(sections)
 }
 
+#[derive(Debug)]
+pub struct ExportSymbol {
+    name_index: u32,
+    name: String,
+    info: u8,
+    other: u8,
+    section: u16,
+    value: u64,
+    size: u64,
+}
+
+fn parse_shared_symbols(file: &mut File, sections: &[Elf64Section])
+    -> LazyResult<Vec<ExportSymbol>>
+{
+    const SHT_DYNSYM: u32 = 11;
+    const SHT_STRTAB: u32 = 3;
+    let mut exports = Vec::new();
+
+    let names =
+        // TODO: ensure this is the only .strtab section?
+        if let Some(section) = sections.iter().find(|s| s.stype == SHT_STRTAB) {
+            // allocate a buffer with section size
+            let mut section_content = vec![0_u8; section.size as usize];
+            // read section data at offset
+            file.seek(SeekFrom::Start(section.offset))?;
+            file.read_exact(&mut section_content)?;
+            section_content
+        } else {
+            // No names, no exports.
+            return Ok(exports);
+        };
+
+    let symbols_content =
+        // TODO: ensure this is the only .dynsym section?
+        if let Some(section) = sections.iter().find(|s| s.stype == SHT_DYNSYM) {
+            let mut section_content = vec![0_u8; section.size as usize];
+            file.seek(SeekFrom::Start(section.offset))?;
+            file.read_exact(&mut section_content)?;
+            section_content
+        } else {
+            // No DYNSYM, no exports
+            return Ok(exports);
+        };
+
+    let export_symbol_size = 24;
+    // TODO: check if it's exactly aligned?
+    for chunk in symbols_content.chunks_exact(export_symbol_size) {
+        let name_index = u32::from_le_bytes(chunk[0..4].try_into().unwrap());
+        if name_index == 0 { continue; }
+        let info = chunk[4];
+        let other = chunk[5];
+        let section = u16::from_le_bytes(chunk[6..8].try_into().unwrap());
+        let value = u64::from_le_bytes(chunk[8..16].try_into().unwrap());
+        let size = u64::from_le_bytes(chunk[16..24].try_into().unwrap());
+        let name = &names[name_index as usize..];
+        let end = name.iter().position(|&c| c == b'\0')
+            .ok_or("Expect zero-terminated string")?;
+        let name = std::str::from_utf8(&name[..end])
+            .unwrap_or("BAD_SYMBOL_NAME")
+            .to_string();
+
+        let symbol = ExportSymbol {
+            name_index,
+            name,
+            info,
+            other,
+            section,
+            value,
+            size,
+        };
+
+        exports.push(symbol);
+    }
+
+    Ok(exports)
+}
 
 pub fn parse_elf_info(file: &mut File) -> LazyResult<Elf64> {
     let mut ident = [0_u8; 16];
@@ -242,6 +337,8 @@ pub fn parse_elf_info(file: &mut File) -> LazyResult<Elf64> {
     let sections = parse_sections(file,
         section_count as usize, section_size as usize, section_names as usize)?;
 
+    let exports = parse_shared_symbols(file, &sections)?;
+
     Ok(Elf64 {
         file_type,
         machine_type,
@@ -250,5 +347,6 @@ pub fn parse_elf_info(file: &mut File) -> LazyResult<Elf64> {
         headers,
         sections,
         flags,
+        exports,
     })
 }

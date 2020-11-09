@@ -62,6 +62,7 @@ struct Debugger {
     entry_point: usize,
     current_child: Pid,
     breakpoints: BTreeMap<(Pid, usize), Breakpoint>,
+    pending_breakpoint_addr: Option<usize>,
 }
 
 impl Debugger {
@@ -72,6 +73,9 @@ impl Debugger {
             .map_err(|_| "could not read memory map!")?;
         let mem_path = format!("/proc/{}/mem", child);
         let mem = File::open(mem_path)?;
+
+        let mut elfs = BTreeMap::new();
+
         let auxv = read_auxv(child)?;
         let entry_point = auxv.get_value(auxv::AT_ENTRY)
             .ok_or("Failed to read entry point from auxilliary vector")?;
@@ -81,10 +85,30 @@ impl Debugger {
 
         let mut main_file = File::open(&main_path)?;
         let main_elf = parse_elf_info(&mut main_file)?;
-        let mut elfs = BTreeMap::new();
         elfs.insert(main_path.clone(), main_elf);
 
         let mut breakpoints = BTreeMap::new();
+
+        if let Some(interp) = auxv.get_value(auxv::AT_BASE) {
+            let ld_so_path = maps.find_module(interp)
+                .ok_or("cannot find interpreter module?")?
+                .to_string();
+            let mut ld_so_file = File::open(&ld_so_path)?;
+            let ld_so_elf = parse_elf_info(&mut ld_so_file)?;
+
+            if let Some(export) = ld_so_elf.lookup_export("_dl_debug_state") {
+                // TODO: need to bound-check this?
+                let addr = interp + export.vaddr;
+                println!("dl_debug_state breakpoint {:x?} {:x}", export.vaddr, addr);
+                //println!("maps: {:x?}", &maps);
+                let mut breakpoint = Breakpoint::new(child, addr);
+                breakpoint.enable()?;
+                breakpoints.insert((child, addr), breakpoint);
+            }
+            elfs.insert(ld_so_path.clone(), ld_so_elf);
+        }
+
+        println!("elfs loaded: {:?}", elfs.keys().collect::<Vec<&String>>());
 
         let mut breakpoint = Breakpoint::new(child, entry_point);
         breakpoint.enable()?;
@@ -108,6 +132,7 @@ impl Debugger {
             current_syscall: None,
             current_child: child,
             breakpoints,
+            pending_breakpoint_addr: None,
         })
     }
 
@@ -117,11 +142,11 @@ impl Debugger {
         let prev_addr = regs.rip.wrapping_sub(1);
         // Test if we just executed a breakpoint
         if let Some(breakpoint) = self.breakpoints.get_mut(&(pid, prev_addr as usize)) {
+            println!("hit breakpoint at {:x}", prev_addr);
             regs.rip = prev_addr;
-            println!("disabling the breakpoint we hit.");
-            // TODO: need to enable after single step!
             breakpoint.disable()?;
             ptrace::setregs(pid, regs)?;
+            self.pending_breakpoint_addr = Some(prev_addr as usize);
         }
 
         Ok(())
@@ -129,7 +154,10 @@ impl Debugger {
 
     fn run_loop(&mut self, pause_on_syscalls: bool) -> LazyResult<()> {
         loop {
-            if pause_on_syscalls {
+            let enable_breakpoint = self.pending_breakpoint_addr.take();
+            if enable_breakpoint.is_some() {
+                ptrace::step(self.current_child, None)?;
+            } else if pause_on_syscalls {
                 // Run the child until it hits a breakpoint or a syscal
                 ptrace::syscall(self.current_child, None)?;
             } else {
@@ -148,6 +176,14 @@ impl Debugger {
                     break;
                 }
                 Ok(WaitStatus::Stopped(pid, signal)) => {
+                    // if we just resumed from a previous breakpoint, enable it again.
+                    if let Some(addr) = enable_breakpoint {
+                        if let Some(breakpoint) = self.breakpoints.get_mut(&(pid, addr)) {
+                            println!("re-enabling breakpoint at {:x}", addr);
+                            breakpoint.enable()?;
+                            continue;
+                        }
+                    }
                     // We have hit a regular trap
                     println!("the child has stopped, pid={} signal={}", pid, signal);
                     let mut regs = ptrace::getregs(pid)?;
@@ -190,7 +226,7 @@ fn main() -> LazyResult<()> {
         ForkResult::Parent { child } => {
             // The parent will be the debugger and should know its child pid
             let mut debugger = Debugger::init_with(child)?;
-            debugger.run_loop(true)?;
+            debugger.run_loop(false)?;
         }
         ForkResult::Child => {
             // The child will be the debuggee and spawn target program

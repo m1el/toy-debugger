@@ -131,6 +131,7 @@ impl std::str::FromStr for MemoryRegion {
     }
 }
 
+#[derive(Debug)]
 pub struct MemoryMap {
     regions: Vec<MemoryRegion>,
 }
