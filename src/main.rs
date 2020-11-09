@@ -161,11 +161,59 @@ impl Debugger {
             let filename = &module.filename;
             match self.load_elf(filename) {
                 Ok(loaded) => if loaded {
-                    println!("loaded {}", filename);
+                    println!("loaded {} {:x}", filename, module.base_addr);
                 }
                 Err(err) => {
                     println!("failed to load module {} {:?}",
                              filename, err);
+                }
+            }
+        }
+        self.breakpoint_all_the_things()?;
+        Ok(())
+    }
+
+    fn maybe_breakpoint(
+        breakpoints: &mut BTreeMap<(Pid, usize), Breakpoint>,
+        pid: Pid, addr: usize, name: String,
+    ) -> LazyResult<bool>
+    {
+        use std::collections::btree_map::Entry;
+        match breakpoints.entry((pid, addr)) {
+            Entry::Vacant(entry) => {
+                let mut breakpoint = Breakpoint::new(name, pid, addr);
+                breakpoint.enable()?;
+                entry.insert(breakpoint);
+                Ok(true)
+            }
+            _ => Ok(false)
+        }
+    }
+
+    fn breakpoint_all_the_things(&mut self) -> LazyResult<()> {
+        for (path, elf) in self.elfs.iter() {
+            let module_base =
+                if let Some(addr) = self.maps.module_base(path) {
+                    addr
+                } else {
+                    continue;
+                };
+
+            for symbol in &elf.exports {
+                if symbol.value == 0 { continue; }
+                if !symbol.is_function() { continue; }
+                let address = module_base + symbol.value as usize;
+                let result = Self::maybe_breakpoint(
+                    &mut self.breakpoints,
+                    self.current_child, address, symbol.name.clone());
+                match result {
+                    Ok(added) => if added {
+                        println!("added breakpoint at {:x?}", address);
+                    }
+                    Err(err) => {
+                        println!("failed to add breakpoint at {:x?}, err={:?}",
+                                 address, err);
+                    }
                 }
             }
         }
@@ -224,8 +272,11 @@ impl Debugger {
                         }
                     }
                     // We have hit a regular trap
-                    println!("the child has stopped, pid={} signal={}", pid, signal);
                     let mut regs = ptrace::getregs(pid)?;
+                    println!("the child has stopped, pid={} signal={} rip={:x}",
+                             pid, signal, regs.rip);
+                    let data = ptrace::read(pid, (regs.rip - 4) as _)?
+                        .to_ne_bytes();
                     self.handle_breakpoint(regs, pid)?;
                 }
                 Ok(WaitStatus::PtraceSyscall(pid)) => {
@@ -247,7 +298,8 @@ impl Debugger {
                         self.current_syscall = Some(regs.orig_rax);
                     }
                     if !exited {
-                        println!("syscall={} exited={}", syscall_name, exited);
+                        println!("about to run syscall={}, pid={} rip={:x}",
+                                 syscall_name, pid, regs.rip);
                     }
                 }
                 Ok(event) => {
@@ -265,7 +317,7 @@ fn main() -> LazyResult<()> {
         ForkResult::Parent { child } => {
             // The parent will be the debugger and should know its child pid
             let mut debugger = Debugger::init_with(child)?;
-            debugger.run_loop(false)?;
+            debugger.run_loop(true)?;
         }
         ForkResult::Child => {
             // The child will be the debuggee and spawn target program

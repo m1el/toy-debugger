@@ -155,6 +155,13 @@ impl MemoryMap {
         Ok(Self { regions })
     }
 
+    pub fn module_base(&self, name: &str) -> Option<usize> {
+        self.regions.iter()
+            .find(|region| region.offset == 0 &&
+                  region.filename.as_ref().map(|s| s.as_str()) == Some(name))
+            .map(|region| region.address_range.start)
+    }
+
     pub fn find_module(&self, address: usize) -> Option<&str> {
         self.regions.iter()
             .find(|region| {

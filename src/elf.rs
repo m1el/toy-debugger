@@ -3,7 +3,6 @@ use std::io::{Read, Seek, SeekFrom};
 use std::convert::TryInto;
 use crate::errors::LazyResult;
 
-
 const ELF_MAGIC: &[u8; 4] = b"\x7fELF";
 
 #[repr(u16)]
@@ -58,7 +57,7 @@ pub struct Elf64 {
     headers: Vec<Elf64ProgramHeader>,
     sections: Vec<Elf64Section>,
     flags: u32,
-    exports: Vec<ExportSymbol>,
+    pub exports: Vec<ExportSymbol>,
     /*
 unsigned char e_ident[16]; /* ELF identification */
 Elf64_Half e_type; /* Object file type */
@@ -214,12 +213,19 @@ fn parse_sections(
 #[derive(Debug)]
 pub struct ExportSymbol {
     name_index: u32,
-    name: String,
-    info: u8,
+    pub name: String,
+    pub info: u8,
     other: u8,
     section: u16,
-    value: u64,
-    size: u64,
+    pub value: u64,
+    pub size: u64,
+}
+
+impl ExportSymbol {
+    pub fn is_function(&self) -> bool {
+        const STT_FUNC: u8 = 2;
+        self.info & 0xf == STT_FUNC
+    }
 }
 
 fn parse_shared_symbols(file: &mut File, sections: &[Elf64Section])
