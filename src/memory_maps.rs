@@ -170,9 +170,8 @@ impl MemoryMap {
                 let AddressRange { start, end } = region.address_range;
                 start <= address && end > address
             })?;
-        let AddressRange { start, end } = region.address_range;
+        let AddressRange { start, .. } = region.address_range;
         let name = region.filename.as_ref()?.as_str();
-        let offset = region.offset;
         let mod_address = (address - start) + region.offset;
         Some((name, mod_address))
     }

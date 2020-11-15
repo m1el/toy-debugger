@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use libc::user_regs_struct;
 use nix::unistd::{execv, fork, ForkResult, Pid};
 use nix::sys::wait::{waitpid, WaitStatus};
-use nix::sys::signal::{kill, Signal};
+use nix::sys::signal::{Signal};
 use nix::sys::ptrace;
 
 mod breakpoint;
@@ -54,8 +54,6 @@ fn spawn_traceable_child(prog: &str, argv: &[&str]) -> LazyResult<()> {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ThreadState {
     PtraceStop,
-    SyscallEntryStop,
-    SyscallExitStop,
     Running,
 }
 
@@ -66,7 +64,6 @@ impl ThreadState {
 }
 
 struct Thread {
-    pid: Pid,
     current_syscall: Option<usize>,
     step_addr: Option<usize>,
     state: ThreadState
@@ -86,7 +83,6 @@ impl Process {
     fn new(pid: Pid) -> Self {
         let mut threads = BTreeMap::new();
         threads.insert(pid, Thread {
-            pid,
             step_addr: None,
             current_syscall: None,
             state: ThreadState::PtraceStop,
@@ -121,7 +117,6 @@ impl Process {
 
     fn add_thread(&mut self, pid: Pid) {
         self.threads.insert(pid, Thread {
-            pid,
             current_syscall: None,
             step_addr: None,
             state: ThreadState::PtraceStop,
@@ -148,7 +143,6 @@ struct Debugger {
     entry_point: usize,
     process: Process,
     breakpoints: BTreeMap<usize, Breakpoint>,
-    pending_breakpoint_addr: Option<usize>,
 }
 
 impl Debugger {
@@ -218,7 +212,6 @@ impl Debugger {
             entry_point,
             process: Process::new(child),
             breakpoints,
-            pending_breakpoint_addr: None,
         })
     }
 
@@ -277,73 +270,6 @@ impl Debugger {
     }
 
     fn breakpoint_all_the_things(&mut self) -> LazyResult<()> {
-        const BLACKLIST: &[&str] = &[
-            "CRYPTO_lock",
-            "asn1_get_field_ptr",
-            "free",
-            "malloc",
-            "CRYPTO_free",
-            "CRYPTO_malloc",
-            "X509_NAME_cmp",
-            "X509_subject_name_cmp",
-            "UTF8_putc",
-            "asn1_do_adb",
-            "__ctype_b_loc",
-            "sk_num",
-            "lh_insert",
-            "__ctype_tolower_loc",
-            "memcpy",
-            "ASN1_item_ex_i2d",
-            "ASN1_object_size",
-            "asn1_ex_i2c",
-            "UTF8_getc",
-            "ASN1_template_free",
-            "sk_value",
-            "ASN1_get_object",
-            "ASN1_template_new",
-            "ASN1_primitive_free",
-            "asn1_do_lock",
-            "ASN1_primitive_new",
-            "strlen",
-            "sk_insert",
-            "sk_push",
-            "BUF_MEM_grow",
-            "free",
-            "malloc",
-            "cfree",
-            "__libc_free",
-            "__libc_calloc",
-            "__libc_malloc",
-            "asn1_ex_c2i",
-            "memchr",
-            "ASN1_put_object",
-            "_IO_getline",
-            "_IO_getline_info",
-            "_IO_fgets",
-            "BIO_gets",
-            "sk_free",
-            "asn1_enc_free",
-            "asn1_enc_init",
-            "ASN1_STRING_free",
-            "ASN1_STRING_type_new",
-            "sk_new",
-            "sk_new_null",
-            "ASN1_item_free",
-            "EVP_DecodeBlock",
-            "asn1_enc_restore",
-            "ASN1_item_ex_new",
-            "ASN1_OBJECT_free",
-            "ASN1_OBJECT_new",
-            "OBJ_nid2obj",
-            "asn1_enc_save",
-            "ASN1_tag2bit",
-            "sk_pop_free",
-            "X509_NAME_ENTRY_free",
-            "ASN1_STRING_set",
-            "c2i_ASN1_OBJECT",
-            "ASN1_item_new",
-        ];
-
         for (path, elf) in self.elfs.iter() {
             let module_base =
                 if let Some(addr) = self.maps.module_base(path) {
@@ -355,7 +281,6 @@ impl Debugger {
             for symbol in &elf.exports {
                 if symbol.value == 0 { continue; }
                 if !symbol.is_function() { continue; }
-                if BLACKLIST.contains(&symbol.name.as_str()) { continue; }
                 let address = module_base + symbol.value as usize;
                 let result = Self::maybe_breakpoint(
                     &mut self.breakpoints,
@@ -474,7 +399,6 @@ impl Debugger {
                     self.handle_breakpoint(regs, pid)?;
                 }
                 Ok(WaitStatus::PtraceSyscall(pid)) => {
-                    use ThreadState::*;
                     let regs = ptrace::getregs(pid)?;
                     let new_state = self.process.process_syscall(pid, &regs);
                     let (direction, id) = match new_state {
@@ -485,7 +409,6 @@ impl Debugger {
                                      pid);
                             continue
                         }
-                        _ => unreachable!("invalid syscall state!"),
                     };
                     let name =
                         SYSCALL_NAMES_X86_64.get(id)
@@ -522,6 +445,8 @@ fn main() -> LazyResult<()> {
         ForkResult::Parent { child } => {
             // The parent will be the debugger and should know its child pid
             let mut debugger = Debugger::init_with(child)?;
+            println!("main path: {}", debugger.main_path);
+            println!("auxv: {:?}", debugger.auxv);
             let start = std::time::Instant::now();
             let events = debugger.run_loop(true)?;
             let elapsed = start.elapsed();
@@ -531,7 +456,8 @@ fn main() -> LazyResult<()> {
         }
         ForkResult::Child => {
             // The child will be the debuggee and spawn target program
-            //spawn_traceable_child("/bin/ls", &["/bin/ls"])?;
+            spawn_traceable_child("/bin/ls", &["/bin/ls"])?;
+            /*
             spawn_traceable_child(
                 "/usr/bin/curl",
                 &[
@@ -539,6 +465,7 @@ fn main() -> LazyResult<()> {
                     "-qsocurl-output.txt",
                     "https://www.google.com",
                 ])?;
+                */
         }
     }
     Ok(())

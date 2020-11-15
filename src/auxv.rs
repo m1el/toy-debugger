@@ -26,11 +26,13 @@ pub const AT_RANDOM : usize = 25; /* address of 16 random bytes */
 pub const AT_HWCAP2 : usize = 26; /* extension of AT_HWCAP */
 pub const AT_EXECFN : usize = 31; /* filename of program */
 
+#[derive(Debug)]
 pub struct AuxilliaryEntry {
     tag: usize,
     value: usize,
 }
 
+#[derive(Debug)]
 pub struct AuxilliaryVector {
     data: Vec<AuxilliaryEntry>,
 }
