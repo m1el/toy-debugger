@@ -21,7 +21,8 @@ use errors::LazyResult;
 use memory_maps::{MemoryMap};
 use syscalls::SYSCALL_NAMES_X86_64;
 
-/// Request system to trace our process and exec the target program with arguments
+/// Request system to trace our process and exec the target program with
+/// command line arguments
 fn spawn_traceable_child(prog: &str, argv: &[&str]) -> LazyResult<()> {
     // This string will hold all of the necessary zero-terminated values
     // starting from program name, and followed by arguments.
@@ -40,7 +41,8 @@ fn spawn_traceable_child(prog: &str, argv: &[&str]) -> LazyResult<()> {
         // Keep track of current position in arena
         let mut pos = prog.len() + 1;
         for arg in argv {
-            let cstr = CStr::from_ptr(program_ptr.offset(pos as isize) as *const i8);
+            let cstr =
+                CStr::from_ptr(program_ptr.offset(pos as isize) as *const i8);
             argv_ptr.push(cstr);
             pos += arg.len() + 1;
         }
@@ -179,9 +181,11 @@ impl Debugger {
             if let Some(export) = ld_so_elf.lookup_export("_dl_debug_state") {
                 // TODO: need to bound-check this?
                 let addr = interp + export.vaddr;
-                println!("dl_debug_state breakpoint {:x?} {:x}", export.vaddr, addr);
+                println!("dl_debug_state breakpoint {:x?} {:x}",
+                         export.vaddr, addr);
                 println!("maps: {:x?}", &maps);
-                let mut breakpoint = Breakpoint::new("dl_debug".into(), child, addr);
+                let mut breakpoint =
+                    Breakpoint::new("dl_debug".into(), child, addr);
                 breakpoint.enable()?;
                 breakpoints.insert(addr, breakpoint);
             }
@@ -190,7 +194,8 @@ impl Debugger {
 
         println!("elfs loaded: {:?}", elfs.keys().collect::<Vec<&String>>());
 
-        let mut breakpoint = Breakpoint::new("_start".into(), child, entry_point);
+        let mut breakpoint =
+            Breakpoint::new("_start".into(), child, entry_point);
         breakpoint.enable()?;
         println!("successfully enabled a breakpoint at entry point.");
 
@@ -312,8 +317,11 @@ impl Debugger {
         };
         let prev_addr = regs.rip.wrapping_sub(1);
         // Test if we just executed a breakpoint
-        if let Some(breakpoint) = self.breakpoints.get_mut(&(prev_addr as usize)) {
-            println!("hit breakpoint '{}' at {:x}", breakpoint.name, prev_addr);
+        if let Some(breakpoint) =
+            self.breakpoints.get_mut(&(prev_addr as usize))
+        {
+            println!("hit breakpoint '{}' at {:x}",
+                     breakpoint.name, prev_addr);
             regs.rip = prev_addr;
             breakpoint.disable_in_thread(pid)?;
             ptrace::setregs(pid, regs)?;
@@ -335,14 +343,18 @@ impl Debugger {
         let mut event_counter = 0;
         loop {
             event_counter += 1;
+            // Start up or single step each stopped thread.
             for (&pid, thread) in self.process.threads.iter_mut() {
                 if thread.state.running() { continue }
-                // if we just resumed from a previous breakpoint, enable it again.
+                // if we just resumed from a previous breakpoint,
+                // enable it again.
                 if let Some(pending) = thread.step_addr.take() {
                     println!("single stepping: pid={}", pid);
                     //kill(self.process.pid, Signal::SIGSTOP)?;
                     ptrace::step(pid, None)?;
-                    if let Some(breakpoint) = self.breakpoints.get_mut(&pending) {
+                    if let Some(breakpoint) =
+                        self.breakpoints.get_mut(&pending)
+                    {
                         println!("re-enabling breakpoint at {:x} pid={}",
                                  pending, pid);
                         waitpid(pid, None)?;
@@ -362,7 +374,8 @@ impl Debugger {
             // Wait for the child to hit a trap
             match waitpid(None, None) {
                 Err(error) => {
-                    println!("cannot waitpid, the child may have died. error: {:?}", error);
+                    println!("cannot waitpid, the child may have died.\
+                             error: {:?}", error);
                 }
                 Ok(WaitStatus::Exited(pid, exit_code)) => {
                     if self.process.exit_pid(pid, exit_code) {
@@ -386,7 +399,8 @@ impl Debugger {
                         let elf = self.elfs.get(module)?;
                         elf.addr_to_symbol(addr)
                     });
-                    println!("the child has stopped, pid={} signal={} rip={:x} module={:?} symbol={:?}",
+                    println!("the child has stopped, pid={} signal={} rip={:x}\
+                             module={:?} symbol={:?}",
                              pid, signal, regs.rip, module_info, symbol);
                     // We have hit a regular trap
                     if signal == Signal::SIGSEGV {

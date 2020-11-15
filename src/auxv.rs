@@ -17,11 +17,12 @@ pub const AT_UID    : usize = 11; /* real uid */
 pub const AT_EUID   : usize = 12; /* effective uid */
 pub const AT_GID    : usize = 13; /* real gid */
 pub const AT_EGID   : usize = 14; /* effective gid */
-pub const AT_PLATFORM: usize = 15;  /* string identifying CPU for optimizations */
-pub const AT_HWCAP  : usize = 16;    /* arch dependent hints at CPU capabilities */
+pub const AT_PLATFORM: usize = 15;/* string identifying CPU for optimizations */
+pub const AT_HWCAP  : usize = 16; /* arch dependent hints at CPU capabilities */
 pub const AT_CLKTCK : usize = 17; /* frequency at which times() increments */
-pub const AT_SECURE : usize = 23;   /* secure mode boolean */
-pub const AT_BASE_PLATFORM : usize = 24; /* string identifying real platform, may */
+pub const AT_SECURE : usize = 23; /* secure mode boolean */
+pub const AT_BASE_PLATFORM : usize = 24;
+                                  /* string identifying real platform, may */
 pub const AT_RANDOM : usize = 25; /* address of 16 random bytes */
 pub const AT_HWCAP2 : usize = 26; /* extension of AT_HWCAP */
 pub const AT_EXECFN : usize = 31; /* filename of program */
