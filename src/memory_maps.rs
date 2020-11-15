@@ -92,13 +92,15 @@ impl std::str::FromStr for MemoryRegion {
                 if start != ii {
                     if indicies.len() < max_elements {
                         indicies.push((start, ii));
+                    } else {
+                        break;
                     }
                 }
                 start = ii + 1;
-            } else if indicies.len() + 1 == max_elements {
-                indicies.push((start, s.len()));
             }
         }
+
+        indicies.push((start, s.len()));
 
         let words = indicies.iter()
             .map(|&(start, end)| &s[start..end])
@@ -162,13 +164,17 @@ impl MemoryMap {
             .map(|region| region.address_range.start)
     }
 
-    pub fn find_module(&self, address: usize) -> Option<&str> {
-        self.regions.iter()
+    pub fn find_module(&self, address: usize) -> Option<(&str, usize)> {
+        let region = self.regions.iter()
             .find(|region| {
                 let AddressRange { start, end } = region.address_range;
                 start <= address && end > address
-            })
-            .and_then(|region| region.filename.as_ref().map(|s| s.as_str()))
+            })?;
+        let AddressRange { start, end } = region.address_range;
+        let name = region.filename.as_ref()?.as_str();
+        let offset = region.offset;
+        let mod_address = (address - start) + region.offset;
+        Some((name, mod_address))
     }
 
     // We want to translate a known memory address in the module

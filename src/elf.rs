@@ -84,6 +84,17 @@ pub struct ExportLocation {
 }
 
 impl Elf64 {
+    pub fn addr_to_symbol(&self, addr: usize) -> Option<(&str, usize)> {
+        let mut prev = None;
+        for export in self.exports.iter() {
+            if export.value as usize > addr {
+                break;
+            }
+            prev = Some(export);
+        }
+        let export = prev?;
+        Some((export.name.as_str(), addr - export.value as usize))
+    }
     pub fn lookup_export(&self, symbol: &str) -> Option<ExportLocation> {
         let export = self.exports.iter().find(|e| e.name == symbol)?;
         Some(ExportLocation {
@@ -94,13 +105,17 @@ impl Elf64 {
     }
 }
 
-const CLASS_32BIT: u8 = 1;
-const CLASS_64BIT: u8 = 2;
-const ENDIANNESS_LITTLE: u8 = 1;
-const ENDIANNESS_BIG: u8 = 2;
-const ELF_VERSION: u8 = 1;
-const IDENT_SYSV: u8 = 0;
-const IDENT_LINUX: u8 = 3;
+#[allow(dead_code)]
+mod consts {
+    pub const CLASS_32BIT: u8 = 1;
+    pub const CLASS_64BIT: u8 = 2;
+    pub const ENDIANNESS_LITTLE: u8 = 1;
+    pub const ENDIANNESS_BIG: u8 = 2;
+    pub const ELF_VERSION: u8 = 1;
+    pub const IDENT_SYSV: u8 = 0;
+    pub const IDENT_LINUX: u8 = 3;
+}
+use consts::*;
 
 pub fn parse_program_headers(file: &mut File, count: usize, size: usize)
     -> LazyResult<Vec<Elf64ProgramHeader>>
@@ -291,6 +306,7 @@ fn parse_shared_symbols(file: &mut File, sections: &[Elf64Section])
         exports.push(symbol);
     }
 
+    exports.sort_by_key(|e| e.value);
     Ok(exports)
 }
 
