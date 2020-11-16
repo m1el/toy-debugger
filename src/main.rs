@@ -323,6 +323,9 @@ impl Debugger {
             println!("hit breakpoint '{}' at {:x}",
                      breakpoint.name, prev_addr);
             regs.rip = prev_addr;
+            // TODO: This is not correct!  All threads need to be stopped
+            // before disabling a breakpoint, because some threads may execute
+            // through it.
             breakpoint.disable_in_thread(pid)?;
             ptrace::setregs(pid, regs)?;
             thread.step_addr = Some(prev_addr as usize);
@@ -374,7 +377,7 @@ impl Debugger {
             // Wait for the child to hit a trap
             match waitpid(None, None) {
                 Err(error) => {
-                    println!("cannot waitpid, the child may have died.\
+                    println!("cannot waitpid, the child may have died. \
                              error: {:?}", error);
                 }
                 Ok(WaitStatus::Exited(pid, exit_code)) => {
@@ -399,8 +402,8 @@ impl Debugger {
                         let elf = self.elfs.get(module)?;
                         elf.addr_to_symbol(addr)
                     });
-                    println!("the child has stopped, pid={} signal={} rip={:x}\
-                             module={:?} symbol={:?}",
+                    println!("the child has stopped, pid={} signal={} \
+                             rip={:x} module={:?} symbol={:?}",
                              pid, signal, regs.rip, module_info, symbol);
                     // We have hit a regular trap
                     if signal == Signal::SIGSEGV {
