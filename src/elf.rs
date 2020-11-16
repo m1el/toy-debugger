@@ -5,6 +5,20 @@ use crate::errors::LazyResult;
 
 const ELF_MAGIC: &[u8; 4] = b"\x7fELF";
 
+macro_rules! chomp {
+    ($buf:expr, $ty:ty, le) => {
+        {
+            let size = core::mem::size_of::<$ty>();
+            let head = $buf[..size].try_into().unwrap();
+            let result = <$ty>::from_le_bytes(head);
+            $buf = &$buf[size..];
+            // make Rust happy about unused $buf
+            let _ = $buf;
+            result
+        }
+    }
+}
+
 #[repr(u16)]
 #[derive(Debug, PartialEq, Eq)]
 enum ElfType {
@@ -125,15 +139,15 @@ pub fn parse_program_headers(file: &mut File, count: usize, size: usize)
     if size != elf64_header_size { Err("invalid program headers size, expect 0x38")? }
     let mut buf = vec![0_u8; count * size];
     file.read_exact(&mut buf)?;
-    for chunk in buf.chunks_exact(elf64_header_size) {
-        let htype = u32::from_le_bytes(chunk[0..4].try_into().unwrap());
-        let flags = u32::from_le_bytes(chunk[4..8].try_into().unwrap());
-        let offset = u64::from_le_bytes(chunk[8..16].try_into().unwrap());
-        let vaddr = u64::from_le_bytes(chunk[16..24].try_into().unwrap());
-        let paddr = u64::from_le_bytes(chunk[24..32].try_into().unwrap());
-        let file_size = u64::from_le_bytes(chunk[32..40].try_into().unwrap());
-        let memory_size = u64::from_le_bytes(chunk[40..48].try_into().unwrap());
-        let align = u64::from_le_bytes(chunk[48..56].try_into().unwrap());
+    for mut chunk in buf.chunks_exact(elf64_header_size) {
+        let htype = chomp!(chunk, u32, le);
+        let flags = chomp!(chunk, u32, le);
+        let offset = chomp!(chunk, u64, le);
+        let vaddr = chomp!(chunk, u64, le);
+        let paddr = chomp!(chunk, u64, le);
+        let file_size = chomp!(chunk, u64, le);
+        let memory_size = chomp!(chunk, u64, le);
+        let align = chomp!(chunk, u64, le);
         headers.push(Elf64ProgramHeader {
             htype, flags,
             offset, vaddr, paddr,
@@ -162,19 +176,19 @@ pub struct Elf64Section {
 const ELF64_SECTION_SIZE: usize = 0x40;
 // Parse section from a slice of bytes.
 // panics when the slice has an invalid size.
-fn parse_section(chunk: &[u8]) -> Elf64Section {
+fn parse_section(mut chunk: &[u8]) -> Elf64Section {
     assert_eq!(chunk.len(), ELF64_SECTION_SIZE,
         "invalid chunk size for elf64 section");
-    let name_index = u32::from_le_bytes(chunk[0..4].try_into().unwrap());
-    let stype = u32::from_le_bytes(chunk[4..8].try_into().unwrap());
-    let flags = u64::from_le_bytes(chunk[8..16].try_into().unwrap());
-    let vaddr = u64::from_le_bytes(chunk[16..24].try_into().unwrap());
-    let offset = u64::from_le_bytes(chunk[24..32].try_into().unwrap());
-    let size = u64::from_le_bytes(chunk[32..40].try_into().unwrap());
-    let link = u32::from_le_bytes(chunk[40..44].try_into().unwrap());
-    let info = u32::from_le_bytes(chunk[44..48].try_into().unwrap());
-    let align = u64::from_le_bytes(chunk[48..56].try_into().unwrap());
-    let entry_size = u64::from_le_bytes(chunk[56..64].try_into().unwrap());
+    let name_index = chomp!(chunk, u32, le);
+    let stype = chomp!(chunk, u32, le);
+    let flags = chomp!(chunk, u64, le);
+    let vaddr = chomp!(chunk, u64, le);
+    let offset = chomp!(chunk, u64, le);
+    let size = chomp!(chunk, u64, le);
+    let link = chomp!(chunk, u32, le);
+    let info = chomp!(chunk, u32, le);
+    let align = chomp!(chunk, u64, le);
+    let entry_size = chomp!(chunk, u64, le);
 
     Elf64Section {
         name_index,
@@ -278,14 +292,14 @@ fn parse_shared_symbols(file: &mut File, sections: &[Elf64Section])
 
     let export_symbol_size = 24;
     // TODO: check if it's exactly aligned?
-    for chunk in symbols_content.chunks_exact(export_symbol_size) {
-        let name_index = u32::from_le_bytes(chunk[0..4].try_into().unwrap());
+    for mut chunk in symbols_content.chunks_exact(export_symbol_size) {
+        let name_index = chomp!(chunk, u32, le);
         if name_index == 0 { continue; }
-        let info = chunk[4];
-        let other = chunk[5];
-        let section = u16::from_le_bytes(chunk[6..8].try_into().unwrap());
-        let value = u64::from_le_bytes(chunk[8..16].try_into().unwrap());
-        let size = u64::from_le_bytes(chunk[16..24].try_into().unwrap());
+        let info = chomp!(chunk, u8, le);
+        let other = chomp!(chunk, u8, le);
+        let section = chomp!(chunk, u16, le);
+        let value = chomp!(chunk, u64, le);
+        let size = chomp!(chunk, u64, le);
         let name = &names[name_index as usize..];
         let end = name.iter().position(|&c| c == b'\0')
             .ok_or("Expect zero-terminated string")?;
@@ -327,29 +341,30 @@ pub fn parse_elf_info(file: &mut File) -> LazyResult<Elf64> {
         Err("Expect system SYSV or Linux")?
     }
 
-    let mut headers = [0_u8; 0x40 - 0x10];
-    file.read_exact(&mut headers[..])?;
-    let file_type = u16::from_le_bytes(headers[0..2].try_into().unwrap());
+    let mut headers_buf = [0_u8; 0x40 - 0x10];
+    file.read_exact(&mut headers_buf[..])?;
+    let mut headers = &headers_buf[..];
+    let file_type = chomp!(headers, u16, le);
     let file_type = ElfType::from_u16(file_type)
         .ok_or("invalid elf type!")?;
-    let machine_type = u16::from_le_bytes(headers[2..4].try_into().unwrap());
+    let machine_type = chomp!(headers, u16, le);
     if machine_type != 0x3e { Err("Only know amd64 machine type")?; }
-    let version = u32::from_le_bytes(headers[4..8].try_into().unwrap());
-    let entry_point = u64::from_le_bytes(headers[8..16].try_into().unwrap());
-    let header_table = u64::from_le_bytes(headers[16..24].try_into().unwrap());
-    let section_table = u64::from_le_bytes(headers[24..32].try_into().unwrap());
-    let flags = u32::from_le_bytes(headers[32..36].try_into().unwrap());
-    let this_size = u16::from_le_bytes(headers[36..38].try_into().unwrap());
-    if this_size as usize != ident.len() + headers.len() {
+    let version = chomp!(headers, u32, le);
+    let entry_point = chomp!(headers, u64, le);
+    let header_table = chomp!(headers, u64, le);
+    let section_table = chomp!(headers, u64, le);
+    let flags = chomp!(headers, u32, le);
+    let this_size = chomp!(headers, u16, le);
+    if this_size as usize != ident.len() + headers_buf.len() {
         Err("invalid ELF header size")?;
     }
 
-    let header_size = u16::from_le_bytes(headers[38..40].try_into().unwrap());
-    let header_count = u16::from_le_bytes(headers[40..42].try_into().unwrap());
+    let header_size = chomp!(headers, u16, le);
+    let header_count = chomp!(headers, u16, le);
 
-    let section_size = u16::from_le_bytes(headers[42..44].try_into().unwrap());
-    let section_count = u16::from_le_bytes(headers[44..46].try_into().unwrap());
-    let section_names = u16::from_le_bytes(headers[46..48].try_into().unwrap());
+    let section_size = chomp!(headers, u16, le);
+    let section_count = chomp!(headers, u16, le);
+    let section_names = chomp!(headers, u16, le);
 
     file.seek(SeekFrom::Start(header_table))?;
     let headers = parse_program_headers(file,
