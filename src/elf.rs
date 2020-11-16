@@ -10,13 +10,16 @@ const ELF_MAGIC: &[u8] = b"\x7fELF";
 /// `ne` (Native Endian)
 macro_rules! buf_to_int {
     ($buf:expr, $ty:ty, le) => {
-        <$ty>::from_le_bytes($buf)
+        use core::convert::TryInto;
+        <$ty>::from_le_bytes($buf.try_into().unwrap())
     };
     ($buf:expr, $ty:ty, be) => {
-        <$ty>::from_be_bytes($buf)
+        use core::convert::TryInto;
+        <$ty>::from_be_bytes($buf.try_into().unwrap())
     };
     ($buf:expr, $ty:ty, ne) => {
-        <$ty>::from_ne_bytes($buf)
+        use core::convert::TryInto;
+        <$ty>::from_ne_bytes($buf.try_into().unwrap())
     };
 }
 
@@ -30,10 +33,8 @@ macro_rules! buf_to_int {
 macro_rules! chomp {
     ($buf:expr, $ty:ty, $endian:ident) => {
         {
-            use core::convert::TryInto;
             let size = core::mem::size_of::<$ty>();
-            let head = $buf[..size].try_into().unwrap();
-            let result = buf_to_int!(head, $ty, $endian);
+            let result = buf_to_int!($buf[..size], $ty, $endian);
             // Advance the buffer
             $buf = &$buf[size..];
             // Make Rust happy about unused $buf
