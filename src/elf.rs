@@ -1,22 +1,46 @@
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::convert::TryInto;
 use crate::errors::LazyResult;
 
-const ELF_MAGIC: &[u8; 4] = b"\x7fELF";
+const ELF_MAGIC: &[u8] = b"\x7fELF";
 
-macro_rules! chomp {
+/// Convert an array of bytes to an int of specified type,
+/// using specifiedn endianness.
+/// Endiannes is one of `le` (Little Endian), `be` (Big Endian),
+/// `ne` (Native Endian)
+macro_rules! buf_to_int {
     ($buf:expr, $ty:ty, le) => {
+        <$ty>::from_le_bytes($buf)
+    };
+    ($buf:expr, $ty:ty, be) => {
+        <$ty>::from_be_bytes($buf)
+    };
+    ($buf:expr, $ty:ty, ne) => {
+        <$ty>::from_ne_bytes($buf)
+    };
+}
+
+/// Consume an integer value from a buffer and advance the buffer.
+///
+/// ```rust
+/// let mut buf: &[u8] = &[32, 3, 42];
+/// assert_eq!(chomp!(buf, u16, le), 800);
+/// assert_eq!(chomp!(buf, u8, le), 42);
+/// ```
+macro_rules! chomp {
+    ($buf:expr, $ty:ty, $endian:ident) => {
         {
+            use std::convert::TryInto;
             let size = core::mem::size_of::<$ty>();
             let head = $buf[..size].try_into().unwrap();
-            let result = <$ty>::from_le_bytes(head);
+            let result = buf_to_int!(head, $ty, $endian);
+            // Advance the buffer
             $buf = &$buf[size..];
-            // make Rust happy about unused $buf
+            // Make Rust happy about unused $buf
             let _ = $buf;
             result
         }
-    }
+    };
 }
 
 #[repr(u16)]
@@ -136,7 +160,9 @@ pub fn parse_program_headers(file: &mut File, count: usize, size: usize)
 {
     let mut headers = Vec::new();
     let elf64_header_size = 0x38;
-    if size != elf64_header_size { Err("invalid program headers size, expect 0x38")? }
+    if size != elf64_header_size {
+        Err("invalid program headers size, expect 0x38")?;
+    }
     let mut buf = vec![0_u8; count * size];
     file.read_exact(&mut buf)?;
     for mut chunk in buf.chunks_exact(elf64_header_size) {
@@ -327,13 +353,13 @@ fn parse_shared_symbols(file: &mut File, sections: &[Elf64Section])
 pub fn parse_elf_info(file: &mut File) -> LazyResult<Elf64> {
     let mut ident = [0_u8; 16];
     file.read_exact(&mut ident[..])?;
-    let magic: [u8; 4] = ident[..4].try_into().unwrap();
+    let magic = &ident[..4];
     let class = ident[4];
     let endianness = ident[5];
     let version = ident[6];
     let osabi = ident[7];
 
-    if &magic != ELF_MAGIC { Err("invalid ELF magic header")?; }
+    if magic != ELF_MAGIC { Err("invalid ELF magic header")?; }
     if class != CLASS_64BIT { Err("expect 64-bit ELF class")?; }
     if endianness != ENDIANNESS_LITTLE { Err("expect little endian file")?; }
     if version != ELF_VERSION { Err("unexpected ELF version")?; }
