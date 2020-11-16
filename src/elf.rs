@@ -10,16 +10,16 @@ const ELF_MAGIC: &[u8] = b"\x7fELF";
 /// `ne` (Native Endian)
 macro_rules! buf_to_int {
     ($buf:expr, $ty:ty, le) => {
-        use core::convert::TryInto;
-        <$ty>::from_le_bytes($buf.try_into().unwrap())
+        <$ty>::from_le_bytes(
+            core::convert::TryInto::try_into(&$buf).unwrap())
     };
     ($buf:expr, $ty:ty, be) => {
-        use core::convert::TryInto;
-        <$ty>::from_be_bytes($buf.try_into().unwrap())
+        <$ty>::from_be_bytes(
+            core::convert::TryInto::try_into(&$buf).unwrap())
     };
     ($buf:expr, $ty:ty, ne) => {
-        use core::convert::TryInto;
-        <$ty>::from_ne_bytes($buf.try_into().unwrap())
+        <$ty>::from_ne_bytes(
+            core::convert::TryInto::try_into(&$buf).unwrap())
     };
 }
 
