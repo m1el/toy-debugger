@@ -30,7 +30,7 @@ macro_rules! buf_to_int {
 macro_rules! chomp {
     ($buf:expr, $ty:ty, $endian:ident) => {
         {
-            use std::convert::TryInto;
+            use core::convert::TryInto;
             let size = core::mem::size_of::<$ty>();
             let head = $buf[..size].try_into().unwrap();
             let result = buf_to_int!(head, $ty, $endian);
